@@ -22,8 +22,6 @@ temp/
 *.wav
 *.mp3
 
-# Model Weights (Large files)
-wav2lip/checkpoints/
 *.pth
 *.pt
 
