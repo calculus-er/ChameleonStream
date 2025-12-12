@@ -3,15 +3,65 @@ import tempfile
 import os
 import requests
 from huggingface_hub import InferenceClient
-from moviepy import VideoFileClip, AudioFileClip
+
+# MoviePy import with fallback to avoid missing editor module
+try:
+    from moviepy.editor import VideoFileClip, AudioFileClip  # preferred path
+except ImportError:
+    from moviepy.video.io.VideoFileClip import VideoFileClip
+    from moviepy.audio.io.AudioFileClip import AudioFileClip
+
+import ffmpeg
+
 from dotenv import load_dotenv
 from groq import Groq
+import subprocess
+import sys
+import os
+
+# Simple temporary file uploader to get a public URL for Sync API
+def upload_to_tmpshare(path: str) -> str:
+    """
+    Upload a file to a temp host and return a direct download URL usable by Sync API.
+    Tries file.io first, falls back to tmpfiles.org (with /dl/ direct link).
+    """
+    if not os.path.exists(path):
+        raise ValueError(f"File not found for upload: {path}")
+
+    # Try file.io
+    try:
+        with open(path, "rb") as f:
+            files = {"file": (os.path.basename(path), f)}
+            resp = requests.post("https://file.io", files=files, timeout=120)
+        if resp.status_code == 200:
+            data = resp.json()
+            link = data.get("link")
+            if link:
+                return link
+    except Exception:
+        pass  # fall back
+
+    # Fallback: tmpfiles.org with direct dl link
+    with open(path, "rb") as f:
+        files = {"file": (os.path.basename(path), f)}
+        resp = requests.post("https://tmpfiles.org/api/v1/upload", files=files, timeout=120)
+    if resp.status_code != 200:
+        raise ValueError(f"Upload failed (status {resp.status_code}): {resp.text[:200]}")
+    data = resp.json()
+    url = data.get("data", {}).get("url")
+    if not url:
+        raise ValueError(f"Upload response missing URL: {data}")
+    # Convert to direct download link
+    file_id = url.rstrip("/").split("/")[-1]
+    direct_url = f"https://tmpfiles.org/dl/{file_id}"
+    return direct_url
 
 # Load environment variables
 load_dotenv()
 hf_token = os.getenv("HF_TOKEN")
 eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
 groq_api_key = os.getenv("GROQ_API_KEY")
+sync_api_key = os.getenv("SYNC_API_KEY")
 default_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # common default voice
 default_tts_model = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_multilingual_v2")
 
@@ -97,6 +147,16 @@ with st.sidebar:
     st.subheader("TTS Settings")
     voice_id_input = st.text_input("ElevenLabs voice_id", value=default_voice_id)
     tts_model_input = st.text_input("ElevenLabs model_id", value=default_tts_model)
+
+    st.markdown("---")
+    st.subheader("Lip Sync Settings")
+    enable_lip_sync = st.checkbox("Enable Lip Sync (using local Wav2Lip)", value=False)
+    if enable_lip_sync:
+        checkpoint_path = "wav2lip/checkpoints/wav2lip_gan.pth"
+        if os.path.exists(checkpoint_path):
+            st.success("✅ Lip sync enabled with local Wav2Lip")
+        else:
+            st.warning("⚠️ Wav2Lip model not found. Run 'python download_models.py' first")
 
     st.markdown("---")
 
@@ -208,12 +268,109 @@ def synthesize_speech(text: str, voice_id: str = "21m00Tcm4TlvDq8ikWAM", model_i
     return tfile.name
 
 def replace_audio_track(video_path: str, audio_path: str) -> str:
-    """Replace audio track of video with provided audio; returns path to new video."""
-    video = VideoFileClip(video_path)
-    new_audio = AudioFileClip(audio_path)
+    """
+    Replace the audio track of `video_path` with `audio_path` using ffmpeg.
+    This avoids MoviePy set_audio issues on some installs.
+    Returns path to the new video file.
+    """
     out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-    video.set_audio(new_audio).write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
+    try:
+        video_in = ffmpeg.input(video_path)
+        audio_in = ffmpeg.input(audio_path)
+        (
+            ffmpeg
+            .output(video_in.video, audio_in.audio, out_path, vcodec="copy", acodec="aac", shortest=None)
+            .overwrite_output()
+            .run(quiet=True)
+        )
+    except ffmpeg.Error as e:
+        # Clean up on error
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+        raise ValueError(f"FFmpeg failed to mux audio: {e.stderr.decode('utf-8', errors='ignore') if hasattr(e, 'stderr') else e}")
     return out_path
+
+def apply_lip_sync(video_path: str, audio_path: str) -> str:
+    """Apply lip sync using local Wav2Lip model; returns path to lip-synced video."""
+    import time as time_module
+    
+    # Get absolute paths
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    wav2lip_dir = os.path.join(project_dir, "wav2lip")
+    checkpoint_path = os.path.join(wav2lip_dir, "checkpoints", "wav2lip_gan.pth")
+    
+    if not os.path.exists(checkpoint_path):
+        raise ValueError(f"Wav2Lip model not found at {checkpoint_path}. Run 'python download_models.py' first.")
+    
+    # Create temp directories if needed
+    temp_dir = os.path.join(wav2lip_dir, "temp")
+    results_dir = os.path.join(wav2lip_dir, "results")
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+    
+    # Output file path
+    output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+    
+    # Convert audio to wav if needed (Wav2Lip requires wav)
+    if not audio_path.endswith('.wav'):
+        wav_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+        try:
+            (
+                ffmpeg
+                .input(audio_path)
+                .output(wav_path, acodec='pcm_s16le', ar='16000', ac=1)
+                .overwrite_output()
+                .run(quiet=True)
+            )
+            audio_path = wav_path
+        except Exception as e:
+            raise ValueError(f"Failed to convert audio to wav: {e}")
+    
+    # Build the command to run Wav2Lip inference
+    inference_script = os.path.join(wav2lip_dir, "inference.py")
+    
+    # Use Python 3.11 explicitly (Python 3.14 has NumPy 2.x incompatibility with OpenCV)
+    python_exe = r"C:\Users\ragha\AppData\Local\Programs\Python\Python311\python.exe"
+    if not os.path.exists(python_exe):
+        python_exe = sys.executable  # Fallback
+    
+    cmd = [
+        python_exe,
+        inference_script,
+        "--checkpoint_path", checkpoint_path,
+        "--face", video_path,
+        "--audio", audio_path,
+        "--outfile", output_path,
+        "--pads", "0", "10", "0", "0",
+        "--resize_factor", "3",  # Resize to reduce memory for 720p+ videos
+        "--wav2lip_batch_size", "1",  # Minimum batch size for memory efficiency
+        "--face_det_batch_size", "1",  # Minimum face detection batch size
+    ]
+    
+    # Run the inference
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=wav2lip_dir,
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout
+        )
+        
+        if result.returncode != 0:
+            # Combine both stdout and stderr for complete error context
+            error_msg = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}" if (result.stdout or result.stderr) else "Unknown error"
+            raise ValueError(f"Wav2Lip inference failed:\n{error_msg}")
+        
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise ValueError("Wav2Lip produced no output or empty file")
+            
+    except subprocess.TimeoutExpired:
+        raise ValueError("Wav2Lip inference timed out after 10 minutes")
+    except Exception as e:
+        raise ValueError(f"Wav2Lip inference error: {e}")
+    
+    return output_path
 
 # Main Content Area
 col1, col2 = st.columns(2)
@@ -313,18 +470,27 @@ with col3:
         st.info("Translate text to enable TTS.")
 with col4:
     st.markdown("**Lip-sync video generation**")
-    st.info("Placeholder: will drive Wav2Lip/Sync Labs with translated audio.")
+    st.info("Uses local Wav2Lip model for lip sync with translated audio.")
     st.markdown("**On-frame text replacement**")
     st.info("Placeholder: detect + overlay translated text; later inpaint & style match.")
     st.markdown("**Replace audio track with synthesized speech**")
     if st.session_state.uploaded_path and st.session_state.tts_audio:
         if st.button("🎞️ Replace audio in video"):
-            with st.status("Muxing video with new audio...", expanded=True) as status:
+            with st.status("Processing video...", expanded=True) as status:
                 try:
-                    st.write("Combining video + synthesized audio...")
-                    output_video = replace_audio_track(st.session_state.uploaded_path, st.session_state.tts_audio)
+                    # Apply lip sync if enabled (uses ORIGINAL video + TTS audio)
+                    if enable_lip_sync:
+                        st.write("Applying lip sync with Wav2Lip...")
+                        # Lip sync should use the ORIGINAL video, not the audio-replaced one
+                        # Wav2Lip will embed the audio into the output video
+                        output_video = apply_lip_sync(st.session_state.uploaded_path, st.session_state.tts_audio)
+                    else:
+                        # No lip sync, just replace audio track
+                        st.write("Combining video + synthesized audio...")
+                        output_video = replace_audio_track(st.session_state.uploaded_path, st.session_state.tts_audio)
+
                     st.session_state.final_video = output_video
-                    status.update(label="Mux complete", state="complete", expanded=False)
+                    status.update(label="Processing complete", state="complete", expanded=False)
                     st.success("New video ready")
                     st.video(output_video)
                     with open(output_video, "rb") as f:
@@ -335,7 +501,7 @@ with col4:
                             mime="video/mp4"
                         )
                 except Exception as e:
-                    st.error(f"Mux failed: {e}")
+                    st.error(f"Processing failed: {e}")
     else:
         st.info("Upload + TTS needed to replace audio.")
 

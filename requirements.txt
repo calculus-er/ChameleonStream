@@ -5,3 +5,12 @@ moviepy>=1.0.3
 ffmpeg-python>=0.2.0
 requests>=2.32.0
 groq>=0.12.0
+# Wav2Lip dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+librosa>=0.10.0
+scipy>=1.10.0
+opencv-contrib-python>=4.8.0
+tqdm>=4.65.0
+numba>=0.57.0
