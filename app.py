@@ -5,13 +5,21 @@ import requests
 from huggingface_hub import InferenceClient
 from moviepy import VideoFileClip, AudioFileClip
 from dotenv import load_dotenv
+from groq import Groq
 
 # Load environment variables
 load_dotenv()
 hf_token = os.getenv("HF_TOKEN")
 eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+groq_api_key = os.getenv("GROQ_API_KEY")
 default_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # common default voice
 default_tts_model = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_multilingual_v2")
+
+# Local ASR config (faster-whisper)
+use_local_asr = os.getenv("USE_LOCAL_ASR", "").lower() == "true"
+whisper_model_size = os.getenv("WHISPER_MODEL_SIZE", "medium")
+whisper_device = os.getenv("WHISPER_DEVICE", "cpu")
+whisper_compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 
 # Set page configuration
 st.set_page_config(
@@ -57,16 +65,26 @@ if "tts_audio" not in st.session_state:
     st.session_state.tts_audio = None
 if "final_video" not in st.session_state:
     st.session_state.final_video = None
+if "uploaded_path" not in st.session_state:
+    st.session_state.uploaded_path = None
 
 # Sidebar for controls
 with st.sidebar:
     st.header("Video Processing")
-    st.info("Using **Hugging Face API** (Free & Fast)")
+    st.info("**ASR:** Groq Whisper (if key) → HF Whisper → Local | **Translation:** Groq LLM (if key) → LibreTranslate")
     
+    if groq_api_key:
+        st.success("✅ GROQ_API_KEY set (ASR + Translation available)")
     if hf_token:
-        st.success("✅ HF Token Loaded from Env")
+        st.success("✅ HF Token Loaded (for Whisper)")
+    elif not groq_api_key and not use_local_asr:
+        st.warning("⚠️ No ASR creds: set GROQ_API_KEY or HF_TOKEN or USE_LOCAL_ASR=true")
+    
+    libretranslate_key = os.getenv("LIBRETRANSLATE_API_KEY", "")
+    if libretranslate_key:
+        st.success("✅ LibreTranslate API Key (higher limits)")
     else:
-        st.error("❌ Missing HF_TOKEN in .env")
+        st.info("ℹ️ Using LibreTranslate public API (free, rate-limited)")
 
     st.markdown("---")
     st.subheader("Language")
@@ -90,50 +108,76 @@ def extract_audio(video_path):
     return audio_path
 
 def transcribe_audio(file_path):
-    """Transcribes audio using Hugging Face Inference API"""
-    if not hf_token:
-        raise ValueError("HF_TOKEN is missing from environment variables.")
-        
-    # Initialize client with explicit provider to avoid Sambanova routing error
+    """Transcribes audio using priority: Groq Whisper → HF Whisper → local Faster-Whisper."""
+    # Groq ASR first if available
+    if groq_api_key:
+        client = Groq(api_key=groq_api_key)
+        with open(file_path, "rb") as f:
+            audio_bytes = f.read()
+        resp = client.audio.transcriptions.create(
+            file=(os.path.basename(file_path), audio_bytes),
+            model="whisper-large-v3",
+            response_format="text",
+            temperature=0
+        )
+        return resp.strip()
+
+    # Local ASR path
+    if use_local_asr or not hf_token:
+        try:
+            from faster_whisper import WhisperModel  # type: ignore
+        except Exception as e:
+            raise ValueError(f"Local ASR requested but faster-whisper is not available: {e}")
+        model = WhisperModel(whisper_model_size, device=whisper_device, compute_type=whisper_compute_type)
+        segments, info = model.transcribe(file_path, beam_size=5)
+        transcript = " ".join([seg.text.strip() for seg in segments if seg.text])
+        return transcript.strip()
+
     client = InferenceClient(
-        model="openai/whisper-large-v3", 
+        model="openai/whisper-large-v3",
         token=hf_token,
         provider="hf-inference"
     )
-    
-    # OLD CODE (Caused Error): passed a file object 'f'
-    # with open(file_path, "rb") as f:
-    #    response = client.automatic_speech_recognition(f)
-    
-    # NEW CODE: Pass the file path string directly
     response = client.automatic_speech_recognition(file_path)
-    
     return response.text
 
 def translate_text(text: str, source_lang: str = "en", target_lang: str = "hi") -> str:
-    """Translate text using Hugging Face Inference API."""
-    if not hf_token:
-        raise ValueError("HF_TOKEN is missing; cannot translate.")
-    client = InferenceClient(
-        model="Helsinki-NLP/opus-mt-en-hi",
-        token=hf_token,
-        provider="hf-inference"
-    )
-    # InferenceClient.translation expects src_lang / tgt_lang
-    resp = client.translation(text, src_lang=source_lang, tgt_lang=target_lang)
-    # Normalize different response shapes into a plain string
-    if isinstance(resp, dict):
-        if "translation_text" in resp:
-            return resp["translation_text"]
-        if "generated_text" in resp:
-            return resp["generated_text"]
-    if isinstance(resp, list) and resp:
-        # HF sometimes returns a list of dicts
-        first = resp[0]
-        if isinstance(first, dict):
-            return first.get("translation_text") or first.get("generated_text") or str(first)
-        return str(first)
-    return str(resp)
+    """Translate text using priority: Groq LLM → LibreTranslate."""
+    if groq_api_key:
+        client = Groq(api_key=groq_api_key)
+        prompt = (
+            f"Translate the following text from {source_lang} to {target_lang}.\n"
+            f"Only return the translated text, nothing else.\n\n{text}"
+        )
+        chat = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are a translation engine. Output only the translated text."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        return chat.choices[0].message.content.strip()
+
+    # Fallback: LibreTranslate public API - free, no key needed
+    api_key = os.getenv("LIBRETRANSLATE_API_KEY", "")
+    base_url = os.getenv("LIBRETRANSLATE_URL", "https://libretranslate.com")
+    url = f"{base_url}/translate"
+    payload = {
+        "q": text,
+        "source": source_lang,
+        "target": target_lang,
+        "format": "text"
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        payload["api_key"] = api_key
+    resp = requests.post(url, json=payload, headers=headers, timeout=30)
+    resp.raise_for_status()
+    result = resp.json()
+    if "translatedText" in result:
+        return result["translatedText"]
+    raise ValueError(f"Unexpected LibreTranslate response: {result}")
 
 def synthesize_speech(text: str, voice_id: str = "21m00Tcm4TlvDq8ikWAM", model_id: str = "eleven_multilingual_v2") -> str:
     """Call ElevenLabs TTS, return path to temp wav file."""
@@ -185,6 +229,7 @@ with col1:
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}")
         tfile.write(uploaded_file.read())
         file_path = tfile.name
+        st.session_state.uploaded_path = file_path
 
         if file_path.endswith(('.mp4', '.mov', '.avi')):
             st.video(file_path)
@@ -255,6 +300,13 @@ with col3:
                     status.update(label="TTS done", state="complete", expanded=False)
                     st.success("TTS ready")
                     st.audio(tts_path)
+                    with open(tts_path, "rb") as f:
+                        st.download_button(
+                            "Download translated audio (MP3)",
+                            data=f,
+                            file_name="translated_audio.mp3",
+                            mime="audio/mpeg"
+                        )
                 except Exception as e:
                     st.error(f"TTS failed: {e}")
     else:
@@ -265,17 +317,35 @@ with col4:
     st.markdown("**On-frame text replacement**")
     st.info("Placeholder: detect + overlay translated text; later inpaint & style match.")
     st.markdown("**Replace audio track with synthesized speech**")
-    if uploaded_file and st.session_state.tts_audio:
+    if st.session_state.uploaded_path and st.session_state.tts_audio:
         if st.button("🎞️ Replace audio in video"):
             with st.status("Muxing video with new audio...", expanded=True) as status:
                 try:
                     st.write("Combining video + synthesized audio...")
-                    output_video = replace_audio_track(file_path, st.session_state.tts_audio)
+                    output_video = replace_audio_track(st.session_state.uploaded_path, st.session_state.tts_audio)
                     st.session_state.final_video = output_video
                     status.update(label="Mux complete", state="complete", expanded=False)
                     st.success("New video ready")
                     st.video(output_video)
+                    with open(output_video, "rb") as f:
+                        st.download_button(
+                            "Download video with translated audio",
+                            data=f,
+                            file_name="translated_video.mp4",
+                            mime="video/mp4"
+                        )
                 except Exception as e:
                     st.error(f"Mux failed: {e}")
     else:
         st.info("Upload + TTS needed to replace audio.")
+
+# Persistent displays so text isn't lost after actions
+st.markdown("---")
+st.subheader("Saved results")
+col5, col6 = st.columns(2)
+with col5:
+    st.markdown("**Transcript (detected text)**")
+    st.text_area("Transcript", value=st.session_state.transcript or "", height=200, key="transcript_persist", disabled=True)
+with col6:
+    st.markdown("**Translation**")
+    st.text_area("Translation", value=st.session_state.translation or "", height=200, key="translation_persist", disabled=True)
