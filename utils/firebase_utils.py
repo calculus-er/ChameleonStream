@@ -3,6 +3,7 @@ from firebase_admin import credentials, auth
 import os
 import streamlit as st
 
+
 def init_firebase():
     """
     Initialize Firebase Admin SDK.
@@ -21,21 +22,22 @@ def init_firebase():
                 cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(cred)
                 return True
-            
+
             # 2. Try st.secrets (cloud deployment)
             # You would structure secrets like [firebase] -> type, project_id, etc.
             # This is a placeholder for future cloud compatibility
-            
+
             # 3. Fail gracefully
             print("Warning: serviceAccountKey.json not found.")
             return False
-            
+
         except Exception as e:
             if "already exists" in str(e):
                 return True
             print(f"Firebase init failed: {e}")
             return False
     return True
+
 
 def verify_token(id_token):
     """
@@ -48,6 +50,7 @@ def verify_token(id_token):
     except Exception as e:
         print(f"Token verification failed: {e}")
         return None
+
 
 def get_or_create_user(email):
     """
@@ -65,17 +68,18 @@ def get_or_create_user(email):
         print(f"Firebase user lookup failed: {e}")
         raise e
 
+
 def mint_custom_token(uid):
     """
     Create a custom token for the given UID.
     This token can be used by the client to sign in.
     """
     try:
-        # custom_token is bytes in some sdk versions, str in others. 
+        # custom_token is bytes in some sdk versions, str in others.
         # In python sdk it returns bytes usually.
         custom_token = auth.create_custom_token(uid)
         if isinstance(custom_token, bytes):
-            return custom_token.decode('utf-8')
+            return custom_token.decode("utf-8")
         return custom_token
     except Exception as e:
         print(f"Minting custom token failed: {e}")

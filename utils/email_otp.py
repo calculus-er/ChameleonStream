@@ -5,9 +5,11 @@ import random
 import string
 import os
 
+
 def generate_otp(length=6):
     """Generate a random numeric OTP."""
-    return ''.join(random.choices(string.digits, k=length))
+    return "".join(random.choices(string.digits, k=length))
+
 
 def send_otp_email(to_email, otp):
     """
@@ -18,22 +20,22 @@ def send_otp_email(to_email, otp):
     smtp_port = os.getenv("SMTP_PORT", 587)
     smtp_email = os.getenv("SMTP_EMAIL")
     smtp_password = os.getenv("SMTP_PASSWORD")
-    
+
     # Mock Mode
     if not (smtp_server and smtp_email and smtp_password):
-        print("f" + "-"*50)
+        print("f" + "-" * 50)
         print(f" [MOCK EMAIL] To: {to_email} | OTP: {otp}")
-        print("f" + "-"*50)
+        print("f" + "-" * 50)
         return True, "Mock email sent (check console)"
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = smtp_email
-        msg['To'] = to_email
-        msg['Subject'] = "Your Login OTP"
+        msg["From"] = smtp_email
+        msg["To"] = to_email
+        msg["Subject"] = "Your Login OTP"
 
         body = f"Hello,\n\nYour One-Time Password (OTP) is: {otp}\n\nThis code expires in 5 minutes.\n\nBest,\nChameleon Stream Team"
-        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(body, "plain"))
 
         server = smtplib.SMTP(smtp_server, int(smtp_port))
         server.starttls()
