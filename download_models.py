@@ -3,9 +3,14 @@
 Script to download Wav2Lip models and dependencies
 """
 import os
-import gdown
 import requests
 from pathlib import Path
+
+try:
+    import gdown
+except ImportError:
+    gdown = None
+
 
 
 def download_file(url, destination):
@@ -47,6 +52,8 @@ def main():
     if not os.path.exists(wav2lip_path):
         try:
             print("Downloading Wav2Lip model...")
+            if gdown is None:
+                raise ImportError("gdown is not installed. Install with: pip install gdown or pip install -r requirements.txt")
             gdown.download(
                 "https://drive.google.com/uc?id=1IjFW1cLevs6Ouyu4Yht4mnR4yeuMqO7Y",
                 wav2lip_path,
@@ -60,6 +67,8 @@ def main():
     if not os.path.exists(wav2lip_gan_path):
         try:
             print("Downloading Wav2Lip GAN model...")
+            if gdown is None:
+                raise ImportError("gdown is not installed. Install with: pip install gdown or pip install -r requirements.txt")
             gdown.download(
                 "https://drive.google.com/uc?id=15G3U08c8xsCkOqQxE38Z2XXDnPcOptNk",
                 wav2lip_gan_path,

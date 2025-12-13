@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #0F1A15;
+  --foreground: #E8F5E9;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-inter), system-ui, sans-serif;
+  overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
+  /* Smooth transition for chaos mode */
+}
+
+/* Chaos Mode Theme */
+/* Chaos Mode Theme */
+body.chaos-mode {
+  --background: #FFFF00;
+  /* Bright Yellow */
+  --foreground: #000000;
+  /* Black Text */
+  background-color: var(--background) !important;
+  color: var(--foreground) !important;
+  background-image: none !important;
+}
+
+/* Aggressively remove background images/gradients from ALL elements in Chaos Mode and kill persistence */
+body.chaos-mode * {
+  border-color: #000000 !important;
+  background-image: none !important;
+  /* Kill gradients */
+  background-color: transparent !important;
+  /* Let yellow shine through */
+  color: #000000 !important;
+  /* Force black text */
+  box-shadow: none !important;
+}
+
+/* Exceptions for better visibility */
+body.chaos-mode button {
+  background-color: #000000 !important;
+  color: #FFFF00 !important;
+  border: 1px solid #FFFF00 !important;
+}
+
+/* Selection */
+body.chaos-mode ::selection {
+  background: #000000;
+  color: #FFFF00;
+}
+
+/* Chaos Hero Glitch */
+@keyframes glitch {
+  0% {
+    transform: translate(0)
+  }
+
+  20% {
+    transform: translate(-5px, 5px) skewX(10deg)
+  }
+
+  40% {
+    transform: translate(5px, -5px) skewX(-10deg)
+  }
+
+  60% {
+    transform: translate(-2px, 2px)
+  }
+
+  80% {
+    transform: translate(2px, -2px)
+  }
+
+  100% {
+    transform: translate(0)
+  }
+}
+
+@keyframes erratic-rotate {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+
+  25% {
+    transform: rotate(10deg) scale(1.1);
+  }
+
+  50% {
+    transform: rotate(-20deg) scale(0.9);
+  }
+
+  75% {
+    transform: rotate(5deg) scale(1.2) translateX(10px);
+  }
+
+  85% {
+    transform: rotate(180deg) scale(0.5);
+  }
+
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+body.chaos-mode .hero-chameleon-target {
+  animation: glitch 0.3s infinite ease-in-out alternate-reverse, erratic-rotate 3s infinite linear !important;
+  filter: hue-rotate(90deg) contrast(200%) !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0F1A15;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #22C55E;
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #16A34A;
+}

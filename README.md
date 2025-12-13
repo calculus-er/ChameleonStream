@@ -20,6 +20,48 @@ Optional: Initialize submodules (Wav2Lip code) if not cloned automatically:
 - For existing clones: `git submodule update --init --recursive`
 - For fresh clones (or to fetch submodule later): `git submodule update --init --recursive`
 
+Make sure you're running commands from the project root directory (the folder containing `app.py`). Example:
+
+- Change to the project directory:
+
+```
+cd D:\OneDrive\Desktop\chameleonStream
+```
+
+- Install Python dependencies (ensure your virtualenv is activated):
+
+```
+pip install -r requirements.txt
+```
+
+- Initialize submodules (populate the `wav2lip` directory):
+
+```
+git submodule update --init --recursive
+```
+
+- Download the Wav2Lip models:
+
+```
+python download_models.py
+```
+
+You can also run the helper setup script on Windows to automatically create and activate a virtualenv, install dependencies, initialize submodules, and download models:
+
+```
+# From PowerShell (project root)
+.\scripts\setup_env.ps1
+# Or run with execution policy bypass if needed
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_env.ps1
+```
+
+If `git submodule` is not desired, clone Wav2Lip into the `wav2lip` path manually:
+
+```
+# Run from project root
+git clone https://github.com/Rudrabha/Wav2Lip.git wav2lip
+```
+
 
 ## Current capabilities
 - Upload a video/audio file, extract audio if needed, and transcribe via Hugging Face Inference Whisper.

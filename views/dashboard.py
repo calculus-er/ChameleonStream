@@ -301,28 +301,59 @@ def apply_lip_sync(video_path: str, audio_path: str) -> str:
 
     # Run the inference
     try:
+        # Detect whether CUDA is available in the Python executable we will call
+        gpu_available = False
+        try:
+            check = subprocess.run(
+                [python_exe, "-c", "import torch;print(1 if torch.cuda.is_available() else 0)"],
+                capture_output=True,
+                text=True,
+                cwd=wav2lip_dir,
+                timeout=10,
+            )
+            gpu_available = check.stdout.strip() == "1"
+        except Exception:
+            gpu_available = False
+
+        # Give more time if running on CPU-only systems
+        timeout_seconds = 1800 if gpu_available else 3600
+
         result = subprocess.run(
             cmd,
             cwd=wav2lip_dir,
             capture_output=True,
             text=True,
-            timeout=600,  # 10 minute timeout
+            timeout=timeout_seconds,
         )
 
+        # Always save stdout/stderr for later inspection
+        timestamp = int(time_module.time())
+        log_path = os.path.join(results_dir, f"inference_{timestamp}.log")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("=== STDOUT ===\n")
+            f.write(result.stdout or "")
+            f.write("\n=== STDERR ===\n")
+            f.write(result.stderr or "")
+
         if result.returncode != 0:
-            # Combine both stdout and stderr for complete error context
-            error_msg = (
-                f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
-                if (result.stdout or result.stderr)
-                else "Unknown error"
-            )
-            raise ValueError(f"Wav2Lip inference failed:\n{error_msg}")
+            # If the process returned non-zero but produced a valid output file, accept it and warn
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                st.warning(
+                    f"Wav2Lip returned non-zero exit code but produced an output file; see {log_path} for details"
+                )
+            else:
+                error_msg = (
+                    f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+                    if (result.stdout or result.stderr)
+                    else "Unknown error"
+                )
+                raise ValueError(f"Wav2Lip inference failed:\n{error_msg}\nLogs: {log_path}")
 
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise ValueError("Wav2Lip produced no output or empty file")
+            raise ValueError(f"Wav2Lip produced no output or empty file. See logs: {log_path}")
 
     except subprocess.TimeoutExpired:
-        raise ValueError("Wav2Lip inference timed out after 10 minutes")
+        raise ValueError(f"Wav2Lip inference timed out after {timeout_seconds//60} minutes")
     except Exception as e:
         raise ValueError(f"Wav2Lip inference error: {e}")
 
