@@ -15,6 +15,12 @@ Early Streamlit prototype for the Chameleon localization pipeline.
    - Optional: `USE_LOCAL_ASR=true` to use local Faster-Whisper (no HF token). Configure `WHISPER_MODEL_SIZE`, `WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE` as needed.
 4) Run the app: `streamlit run app.py`
 
+Optional: Initialize submodules (Wav2Lip code) if not cloned automatically:
+
+- For existing clones: `git submodule update --init --recursive`
+- For fresh clones (or to fetch submodule later): `git submodule update --init --recursive`
+
+
 ## Current capabilities
 - Upload a video/audio file, extract audio if needed, and transcribe via Hugging Face Inference Whisper.
 - Translate transcript (EN→HI) using LibreTranslate (free), or Groq LLM if `GROQ_API_KEY` is set.
