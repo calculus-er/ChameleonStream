@@ -29,3 +29,14 @@ Optional: Initialize submodules (Wav2Lip code) if not cloned automatically:
 
 ## Notes
 - Keep videos short during testing to avoid timeouts on free endpoints.
+
+
+ZDKZ,DNFVklsfBnfd 
+""LKSFLKa          
+Dl'rsgrgh;
+'z'd';f'gd''
+'
+'           
+'
+'
+ ''pklkjnalKf                    """" " "" " 
